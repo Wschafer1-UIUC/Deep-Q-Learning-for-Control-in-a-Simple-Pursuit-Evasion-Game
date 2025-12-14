@@ -24,9 +24,7 @@ class PursuitEvasionEnv:
     #              
     #              Action Space: [0: turn left, 1: go straight, 2: turn right]
     #
-    #              Reward Structure: { -1.0     for all time steps,
-    #                                  +100.0   for success (captured or reached),
-    #                                  -100.0   for failure (captured or reached) }
+    #              Reward Structure: { +100.0   for success (captured or reached) }
     #
     #              The command center is initialized within some range around the
     #              origin, the evader is initialized within some radius about the
@@ -36,21 +34,23 @@ class PursuitEvasionEnv:
     #
     # Inputs:
     #   config = {
-    #       "controlled_agent": "pursuer" or "evader",
-    #       "dt": float,
-    #       "max_steps": int,
-    #       "x_e_range": float,
-    #       "y_e_range": float,
-    #       "evader_dist": float,
+    #       "controlled_agent":      "pursuer" or "evader",
+    #       "dt":                    float,
+    #       "max_steps":             int,
+    #       "x_e_range":             float,
+    #       "y_e_range":             float,
+    #       "evader_dist":           [dist_e_min, dist_e_max],
     #       "command_center_radius": float,
-    #       "evader_radius": float,
-    #       "w_p": float,
-    #       "w_e": float,
-    #       "k_pursuer": float,
-    #       "k_evader": float,
-    #       "v_p": [v_p_min, v_p_max],
-    #       "v_e": [v_e_min, v_e_max],
-    #       "seed": int
+    #       "evader_radius":         float,
+    #       "w_p":                   float,
+    #       "w_e":                   float,
+    #       "k_pursuer":             float,
+    #       "k_evader":              float,
+    #       "v_p":                   [v_p_min, v_p_max],
+    #       "v_e":                   [v_e_min, v_e_max],
+    #       "evader_algo":           "alpha-blend" or "homing" or "random" or "long random"
+    #       "pursuer_algo":          "constant-bearing" or "" or ""
+    #       "seed":                  int
     #   }
     #
     # Outputs:
@@ -92,10 +92,9 @@ class PursuitEvasionEnv:
         self.dt = float(self.config.get("dt", 0.1))
         self.max_steps = int(self.config.get("max_steps", 500))
 
-        # evader spawn configs
-        self.x_e_range = float(self.config.get("x_e_range", 100.0))       # command center x spawn range [-100, 100]
-        self.y_e_range = float(self.config.get("y_e_range", 100.0))       # command center y spawn range [-100, 100]
-        self.evader_dist = float(self.config.get("evader_dist", 100.0))   # evader's radial distance from command center
+        # spawn configs
+        self.x_e_range = float(self.config.get("x_e_range", 100.0))           # command center x spawn range [-100, 100]
+        self.y_e_range = float(self.config.get("y_e_range", 100.0))           # command center y spawn range [-100, 100]
 
         # termination configs
         self.command_center_radius = float(self.config.get("command_center_radius", 3.0))   # size of the command center
@@ -108,6 +107,21 @@ class PursuitEvasionEnv:
         # agent guidance proportional control configs (default / non-learned guidance)
         self.k_pursuer = float(self.config.get("k_pursuer", 1.0))
         self.k_evader = float(self.config.get("k_evader", 1.0))
+
+        # evader method (if not the controlled agent)
+        self.evader_algo = self.config.get("evader_algo", "homing")   # homing, alpha-blend, random, long random
+        self.dash_flag = False   
+        self.curr_step = 0
+        self.rand_steps = 0
+        self.w_e_hold = 0.0
+
+        # pursuer method (if not the controlled agent)
+        self.pursuer_algo = self.config.get("pursuer_algo", "constant-bearing")   # constant-bearing, deviated, homing
+        self.T_horizon = 0.75   # second
+
+        # control logging
+        self.w_p_hist = []
+        self.w_e_hist = []
 
         # initialize agent observation and action space
         self._init_spaces()
@@ -160,6 +174,11 @@ class PursuitEvasionEnv:
         y_c = self.random.uniform(-self.y_e_range, self.y_e_range)
         self.command_center = np.array([x_c, y_c], dtype=np.float32)
 
+        # reset evader location
+        evader_dist_range = self.config.get("evader_dist", [10, 50])
+        evader_dist_min, evader_dist_max = float(evader_dist_range[0]), float(evader_dist_range[1])
+        evader_dist = self.random.uniform(evader_dist_min, evader_dist_max)
+
         # reset pursuer and evader forward velocities
         v_p = self.config.get("v_p", [1.0, 5.0])
         v_e = self.config.get("v_e", [1.0, 5.0])
@@ -170,8 +189,8 @@ class PursuitEvasionEnv:
 
         # reset evader position and heading
         rand_angle = self.random.uniform(0, 2*np.pi)
-        x_e = x_c + self.evader_dist * np.cos(rand_angle)
-        y_e = y_c + self.evader_dist * np.sin(rand_angle)
+        x_e = x_c + evader_dist * np.cos(rand_angle)
+        y_e = y_c + evader_dist * np.sin(rand_angle)
         theta_e = np.arctan2(y_c - y_e, x_c - x_e)
 
         # reset the pursuer position and heading
@@ -199,6 +218,16 @@ class PursuitEvasionEnv:
             self.prev_d_ep = d_ep
             self.prev_d_ec = d_ec
 
+        # initialize evader algorithm parameters
+        self.dash_flag = False
+        self.rand_steps = 0
+        self.curr_step = 0
+        self.w_e_hold = 0.0
+
+        # initialize control command tracking
+        self.w_p_hist = []
+        self.w_e_hist = []
+
         # compute the environment observation and information
         obs = self.compute_observation()
 
@@ -217,8 +246,10 @@ class PursuitEvasionEnv:
         prev_pos_p = self.pursuer_state[:2].copy()
 
         # apply pursuer and evader dynamics
-        self.apply_pursuer_dynamics(action)
-        self.apply_evader_dynamics(action)
+        w_p = self.apply_pursuer_dynamics(action)
+        w_e = self.apply_evader_dynamics(action, self.step_count)
+        self.w_p_hist.append(abs(float(w_p)))
+        self.w_e_hist.append(abs(float(w_e)))
 
         # check termination conditions
         terminated, truncated, d_ec, d_ep, d_pc, evader_reached, evader_captured = self.check_termination(prev_pos_e, prev_pos_p)
@@ -254,12 +285,30 @@ class PursuitEvasionEnv:
 
         # update pursuer state (default: constant-bearing pursuit)
         else:
-            LOS_angle = np.arctan2(y_e - y_p, x_e - x_p)                             # line of sight to evader
-            beta = self.wrap_angle(theta_e - LOS_angle)                              # relative heading of evader wrt LOS
-            alpha = np.arcsin(np.clip(v_e/(v_p + 1e-8) * np.sin(beta), -1.0, 1.0))   # lead angle
-            heading_error = self.wrap_angle(LOS_angle + alpha - theta_p)             # pursuer heading error from evader
-            w_p_cmd = self.k_pursuer * heading_error                                 # pursuer turn control command
-            w_p = np.clip(w_p_cmd, -self.w_p_max, self.w_p_max)                      # bound pursuer turn rate
+
+            # constant-bearing model
+            if self.pursuer_algo == 'constant-bearing':
+                LOS_angle = np.arctan2(y_e - y_p, x_e - x_p)                             # line of sight to evader
+                beta = self.wrap_angle(theta_e - LOS_angle)                              # relative heading of evader wrt LOS
+                alpha = np.arcsin(np.clip(v_e/(v_p + 1e-8) * np.sin(beta), -1.0, 1.0))   # lead angle
+                heading_error = self.wrap_angle(LOS_angle + alpha - theta_p)             # pursuer heading error from evader
+                w_p_cmd = self.k_pursuer * heading_error                                 # pursuer turn control command
+                w_p = np.clip(w_p_cmd, -self.w_p_max, self.w_p_max)                      # bound pursuer turn rate
+
+            # deviated pursuit (lead)
+            elif self.pursuer_algo == 'deviated':
+                X_E_pred = v_e * np.array([np.cos(theta_e), np.sin(theta_e)]) * self.T_horizon + np.array([x_e, y_e])             # predicted future position of evader
+                LOS_angle = np.arctan2(X_E_pred[1] - y_p, X_E_pred[0] - x_p)                                                      # line of sight to predicted evader position
+                heading_error = self.wrap_angle(LOS_angle - theta_p)                                                              # pursuer heading error from predicted evader position
+                w_p_cmd = self.k_pursuer * heading_error                                                                          # pursuer turn control command
+                w_p = np.clip(w_p_cmd, -self.w_p_max, self.w_p_max)                                                               # bound pursuer turn rate
+            
+            # homing / pure-pursuit model
+            else:
+                LOS_angle = np.arctan2(y_e - y_p, x_e - x_p)                             # line of sight to evader
+                heading_error = self.wrap_angle(LOS_angle - theta_p)                     # pursuer heading error from evader
+                w_p_cmd = self.k_pursuer * heading_error                                 # pursuer turn control command
+                w_p = np.clip(w_p_cmd, -self.w_p_max, self.w_p_max)                      # bound pursuer turn rate
 
         # update pursuer state
         theta_p = self.wrap_angle(theta_p + self.dt * w_p)
@@ -267,8 +316,10 @@ class PursuitEvasionEnv:
         y_p = y_p + v_p * np.sin(theta_p) * self.dt
         self.pursuer_state = np.array([x_p, y_p, theta_p, v_p], dtype=np.float32)
 
+        return w_p * self.dt
+
     # apply evader dynamics (learned or default)
-    def apply_evader_dynamics(self, action):
+    def apply_evader_dynamics(self, action, curr_step_count):
         x_e, y_e, theta_e, v_e = self.evader_state
         x_c, y_c = self.command_center
         x_p, y_p, theta_p, v_p = self.pursuer_state
@@ -288,23 +339,71 @@ class PursuitEvasionEnv:
 
         # update evader state (default: target command center)
         else:
-            alpha = 0.5
 
-            angle2goal = np.arctan2(y_c - y_e, x_c - x_e)                 # line of sight to command center
-            LOS_p = np.arctan2(y_e - y_p, x_e - x_p)                      # bearing from pursuer to evader
-            theta_perp = self.wrap_angle(LOS_p + np.pi/2.0)               # move perpendicular to pursuer LOS
-            v_goal = np.array([np.cos(angle2goal), np.sin(angle2goal)])   # velocity targeting command center
-            v_avoid = np.array([np.cos(theta_perp), np.sin(theta_perp)])  # velocity perpendicular to pursuer LOS
-            v_blend = (1.0 - alpha)*v_goal + alpha*v_avoid                # blended velocities
-            heading_error = self.wrap_angle(np.arctan2(v_blend[1], v_blend[0]) - theta_e)          # evader heading error from command center
-            w_e_cmd = self.k_evader * heading_error                       # evader turn control command
-            w_e = np.clip(w_e_cmd, -self.w_e_max, self.w_e_max)           # bound evader turn rate
-        
+            # alpha-blend model
+            if self.evader_algo == 'alpha-blend':
+                alpha = 0.5
+                angle2goal = np.arctan2(y_c - y_e, x_c - x_e)                 # line of sight to command center
+                LOS_p = np.arctan2(y_e - y_p, x_e - x_p)                      # bearing from pursuer to evader
+                theta_perp = self.wrap_angle(LOS_p + np.pi/2.0)               # move perpendicular to pursuer LOS
+                v_goal = np.array([np.cos(angle2goal), np.sin(angle2goal)])   # velocity targeting command center
+                v_avoid = np.array([np.cos(theta_perp), np.sin(theta_perp)])  # velocity perpendicular to pursuer LOS
+                v_blend = (1.0 - alpha)*v_goal + alpha*v_avoid                # blended velocities
+                heading_error = self.wrap_angle(np.arctan2(v_blend[1], v_blend[0]) - theta_e)          # evader heading error from command center
+                w_e_cmd = self.k_evader * heading_error                       # evader turn control command
+                w_e = np.clip(w_e_cmd, -self.w_e_max, self.w_e_max)           # bound evader turn rate
+
+            # random model
+            elif self.evader_algo == 'random':
+                d_ec = np.hypot(x_c - x_e, y_c - y_e)                                       # distance of evader to command center
+                d_pc = np.hypot(x_c - x_p, y_c - y_p)                                       # distance of pursuer to command center
+                evader_time2reach  = d_ec / max(v_e, 1e-8)                                  # time for evader to reach the command center
+                pursuer_time2reach = d_pc / max(v_p, 1e-8)                                  # time for evader to reach the command center
+                if (evader_time2reach < pursuer_time2reach) or self.dash_flag==True:        # if the evader can beat the pursuer to the command center ...
+                    self.dash_flag = True                                                   # set the dash flag true if it hasnt been set already
+                    angle2goal = np.arctan2(y_c - y_e, x_c - x_e)                           # line of sight to command center
+                    v_goal = np.array([np.cos(angle2goal), np.sin(angle2goal)])             # velocity targeting command center
+                    heading_error = self.wrap_angle(np.arctan2(v_goal[1], v_goal[0]) - theta_e)          # evader heading error from command center
+                    w_e_cmd = self.k_evader * heading_error                                 # evader turn control command
+                    w_e = np.clip(w_e_cmd, -self.w_e_max, self.w_e_max)                     # bound evader turn rate
+                else:                                                                       # if the evader cannot beat the pursuer to the command center ...
+                    w_e = self.random.uniform(-self.w_e_max, self.w_e_max)                  # take a random action
+
+            # long random model
+            elif self.evader_algo == 'long random':
+                d_ec = np.hypot(x_c - x_e, y_c - y_e)                                       # distance of evader to command center
+                d_pc = np.hypot(x_c - x_p, y_c - y_p)                                       # distance of pursuer to command center
+                evader_time2reach  = d_ec / max(v_e, 1e-8)                                  # time for evader to reach the command center
+                pursuer_time2reach = d_pc / max(v_p, 1e-8)                                  # time for evader to reach the command center
+                
+                if (evader_time2reach < pursuer_time2reach) or self.dash_flag:        # if the evader can beat the pursuer to the command center ...
+                    self.dash_flag = True                                                   # set the dash flag true if it hasnt been set already
+                    angle2goal = np.arctan2(y_c - y_e, x_c - x_e)
+                    heading_error = self.wrap_angle(angle2goal - theta_e)
+                    w_e_cmd = self.k_evader * heading_error                                 # evader turn control command
+                    w_e = np.clip(w_e_cmd, -self.w_e_max, self.w_e_max)                     # bound evader turn rate
+                else:
+                    if (curr_step_count >= self.curr_step + self.rand_steps) or (curr_step_count == 0):
+                        self.rand_steps = self.random.integers(10, 20)
+                        self.curr_step = curr_step_count
+                        self.w_e_hold = self.random.uniform(-self.w_e_max, self.w_e_max)
+                    w_e = self.w_e_hold
+            
+            # homing model
+            else:
+                angle2goal = np.arctan2(y_c - y_e, x_c - x_e)                 # line of sight to command center
+                v_goal = np.array([np.cos(angle2goal), np.sin(angle2goal)])   # velocity targeting command center
+                heading_error = self.wrap_angle(np.arctan2(v_goal[1], v_goal[0]) - theta_e)          # evader heading error from command center
+                w_e_cmd = self.k_evader * heading_error                       # evader turn control command
+                w_e = np.clip(w_e_cmd, -self.w_e_max, self.w_e_max)           # bound evader turn rate
+
         # update the state
         theta_e = self.wrap_angle(theta_e + self.dt * w_e)
         x_e = x_e + v_e * np.cos(theta_e) * self.dt
         y_e = y_e + v_e * np.sin(theta_e) * self.dt
         self.evader_state = np.array([x_e, y_e, theta_e, v_e], dtype=np.float32)
+
+        return w_e * self.dt
 
     # function to compute observation state for controlled agent
     def compute_observation(self):
@@ -417,8 +516,12 @@ class PursuitEvasionEnv:
 
         return (0.0 <= t1 <= 1.0) or (0.0 <= t2 <= 1.0)
     
+    # function to return integrated control history
+    def get_integrated_control_histories(self):
+        return np.asarray(self.w_p_hist, dtype=np.float32), np.asarray(self.w_e_hist, dtype=np.float32)
+    
     # function to visualize the current game
-    def render(self):
+    def render(self, show=True):
         if self.fig is None or self.ax is None:
             self.fig, self.ax = plt.subplots()
             self.ax.set_aspect("equal")
@@ -455,8 +558,7 @@ class PursuitEvasionEnv:
             alpha=0.7,
         )
 
-        # set limits around the command center and evader regions
-        radius = max(self.evader_dist, 20.0)
+        radius = 50.0
         self.ax.set_xlim(x_c - radius, x_c + radius)
         self.ax.set_ylim(y_c - radius, y_c + radius)
         self.ax.set_xlabel("x [m]")
@@ -464,8 +566,9 @@ class PursuitEvasionEnv:
         self.ax.set_title(f"Pursuit–Evasion (t = {self.t:.2f} s)")
         self.ax.legend(loc="upper right")
 
-        plt.pause(0.001)
-        plt.draw()
+        self.fig.canvas.draw()
+        if show:
+            plt.pause(0.001)
 
     # function to clean up and close the environment
     def close(self):
