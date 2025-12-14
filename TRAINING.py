@@ -8,7 +8,6 @@
 import numpy as np
 from pursuit_evasion_env import PursuitEvasionEnv
 from DQN_algos import *
-from simMDP import *
 from plottingFuncs import *
 
 ## <================================= USER INPUTS =================================> ##

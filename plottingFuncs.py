@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import re
 import copy
-from simMDP import *
 import torch
 import torch.nn as nn
 import imageio

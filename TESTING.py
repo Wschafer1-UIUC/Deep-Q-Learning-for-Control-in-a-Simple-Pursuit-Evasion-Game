@@ -7,7 +7,6 @@
 #######################################################################################
 import numpy as np
 from DQN_algos import *
-from simMDP import *
 from plottingFuncs import *
 from plottingFuncs import compare_learned_vs_analytic
 
