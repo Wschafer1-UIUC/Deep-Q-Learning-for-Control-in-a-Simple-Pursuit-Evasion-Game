@@ -398,8 +398,13 @@ def compare_learned_vs_analytic(checkpoint_path, base_config, evader_algo="homin
         print("No frames rendered; GIF was not created (num_render_episodes = 0).")
 
     if (learned_traj_p is not None and learned_traj_e is not None and analytic_traj_p is not None and analytic_traj_e is not None):
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.set_aspect("equal")
+        fig, ax = plt.subplots(figsize=(7, 7))
+
+        try:
+            ax.set_box_aspect(1)
+        except Exception:
+            pass
+        ax.set_aspect("equal", adjustable="box")
 
         if traj_command_center is not None:
             ax.scatter(
@@ -409,109 +414,91 @@ def compare_learned_vs_analytic(checkpoint_path, base_config, evader_algo="homin
                 s=80,
                 c="k",
                 label="Command Center",
+                zorder=5,
             )
 
         ax.plot(
             learned_traj_p[:, 0],
             learned_traj_p[:, 1],
             color="tab:blue",
+            linewidth=2.0,
             label="Pursuer (learned)",
+            zorder=3,
         )
         ax.plot(
             learned_traj_e[:, 0],
             learned_traj_e[:, 1],
             color="lightblue",
             linestyle="--",
+            linewidth=2.0,
             label="Evader (learned run)",
+            zorder=2,
         )
 
         ax.plot(
             analytic_traj_p[:, 0],
             analytic_traj_p[:, 1],
             color="tab:red",
+            linewidth=2.0,
             label="Pursuer (analytic CB)",
+            zorder=3,
         )
         ax.plot(
             analytic_traj_e[:, 0],
             analytic_traj_e[:, 1],
             color="salmon",
             linestyle="--",
+            linewidth=2.0,
             label="Evader (analytic run)",
+            zorder=2,
         )
 
-        ax.scatter(
-            learned_traj_p[0, 0],
-            learned_traj_p[0, 1],
-            marker="o",
-            s=40,
-            color="tab:blue",
-            label="_nolegend_",
-        )
-        ax.scatter(
-            learned_traj_p[-1, 0],
-            learned_traj_p[-1, 1],
-            marker="x",
-            s=40,
-            color="tab:blue",
-            label="_nolegend_",
-        )
-        ax.scatter(
-            learned_traj_e[0, 0],
-            learned_traj_e[0, 1],
-            marker="o",
-            s=40,
-            color="lightblue",
-            label="_nolegend_",
-        )
-        ax.scatter(
-            learned_traj_e[-1, 0],
-            learned_traj_e[-1, 1],
-            marker="x",
-            s=40,
-            color="lightblue",
-            label="_nolegend_",
-        )
+        ax.scatter(learned_traj_p[0, 0], learned_traj_p[0, 1], marker="o", s=45, color="tab:blue", label="_nolegend_", zorder=6)
+        ax.scatter(learned_traj_p[-1, 0], learned_traj_p[-1, 1], marker="x", s=55, color="tab:blue", label="_nolegend_", zorder=6)
+        ax.scatter(learned_traj_e[0, 0], learned_traj_e[0, 1], marker="o", s=45, color="lightblue", label="_nolegend_", zorder=6)
+        ax.scatter(learned_traj_e[-1, 0], learned_traj_e[-1, 1], marker="x", s=55, color="lightblue", label="_nolegend_", zorder=6)
 
-        ax.scatter(
-            analytic_traj_p[0, 0],
-            analytic_traj_p[0, 1],
-            marker="o",
-            s=40,
-            color="tab:red",
-            label="_nolegend_",
-        )
-        ax.scatter(
-            analytic_traj_p[-1, 0],
-            analytic_traj_p[-1, 1],
-            marker="x",
-            s=40,
-            color="tab:red",
-            label="_nolegend_",
-        )
-        ax.scatter(
-            analytic_traj_e[0, 0],
-            analytic_traj_e[0, 1],
-            marker="o",
-            s=40,
-            color="salmon",
-            label="_nolegend_",
-        )
-        ax.scatter(
-            analytic_traj_e[-1, 0],
-            analytic_traj_e[-1, 1],
-            marker="x",
-            s=40,
-            color="salmon",
-            label="_nolegend_",
-        )
+        ax.scatter(analytic_traj_p[0, 0], analytic_traj_p[0, 1], marker="o", s=45, color="tab:red", label="_nolegend_", zorder=6)
+        ax.scatter(analytic_traj_p[-1, 0], analytic_traj_p[-1, 1], marker="x", s=55, color="tab:red", label="_nolegend_", zorder=6)
+        ax.scatter(analytic_traj_e[0, 0], analytic_traj_e[0, 1], marker="o", s=45, color="salmon", label="_nolegend_", zorder=6)
+        ax.scatter(analytic_traj_e[-1, 0], analytic_traj_e[-1, 1], marker="x", s=55, color="salmon", label="_nolegend_", zorder=6)
+
+        all_xy = np.vstack([
+            learned_traj_p, learned_traj_e,
+            analytic_traj_p, analytic_traj_e,
+            traj_command_center.reshape(1, 2) if traj_command_center is not None else np.empty((0, 2))
+        ])
+        xmin, ymin = np.min(all_xy[:, 0]), np.min(all_xy[:, 1])
+        xmax, ymax = np.max(all_xy[:, 0]), np.max(all_xy[:, 1])
+
+        dx = xmax - xmin
+        dy = ymax - ymin
+        span = max(dx, dy)
+        pad = 0.08 * span if span > 0 else 1.0
+
+        cx = 0.5 * (xmin + xmax)
+        cy = 0.5 * (ymin + ymax)
+        half = 0.5 * span + pad
+
+        ax.set_xlim(cx - half, cx + half)
+        ax.set_ylim(cy - half, cy + half)
 
         ax.set_xlabel("x (m)")
         ax.set_ylabel("y (m)")
         ax.set_title("Learned vs Analytic Pursuit: Trajectory Comparison")
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+        ax.grid(True, alpha=0.25)
+
+        ax.legend(
+            loc="upper right",
+            frameon=True,
+            framealpha=0.85,
+            facecolor="white",
+            edgecolor="0.8",
+            fontsize=9,
+        )
+
         fig.tight_layout()
-        fig.savefig(traj_fig_path, dpi=200)
+        fig.savefig(traj_fig_path, dpi=300)
         plt.close(fig)
         print(f"Saved trajectory comparison figure to: {traj_fig_path}")
 

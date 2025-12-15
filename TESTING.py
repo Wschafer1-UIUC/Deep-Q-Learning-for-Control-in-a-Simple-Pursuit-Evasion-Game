@@ -30,12 +30,12 @@ config = {
     "w_e": np.pi / 2.0,
     "k_pursuer": 1.0,
     "k_evader": 1.0,
-    "evader_algo": "random",         # alpha-blend, random, homing
-    "pursuer_algo": "deviated",   # constant-bearing, deviated, homing
-    "v_p": [10.0, 10.0],
-    "v_e": [10.0, 10.0]
+    "evader_algo": "alpha-blend",         # alpha-blend, random, homing
+    "pursuer_algo": "constant-bearing",   # constant-bearing, deviated, homing
+    "v_p": [5.0, 20.0],
+    "v_e": [5.0, 20.0]
 }
-testing_model_path = "DQN_pursuer_random_20000_0.1_[10.0, 10.0]_[10.0, 10.0]_[40.0, 40.0].pt"
+testing_model_path = "DQN_pursuer_alpha-blend_30000_0.1_[5.0, 20.0]_[5.0, 20.0]_[40.0, 40.0].pt"
 num_test_episodes = 1
 num_render_episodes = 0
 
