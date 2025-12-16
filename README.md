@@ -1,11 +1,7 @@
 # Evaluating Learned Pursuit Policies Against Classical Guidance Laws in a 1v1 Pursuit-Evasion Game
 
 ## Abstract
-This study compares learning-based and analytical pursuit guidance in a 1v1 planar pursuit–
-evasion game. A Deep Q-Learning pursuer is evaluated against classical homing, deviated, and
-constant-bearing pursuit laws across deterministic and stochastic evasion strategies. Analytical
-methods dominate structured scenarios, while learning-based pursuit improves robustness
-under uncertainty at the cost of efficiency.
+This study compares learning-based and analytical pursuit guidance in a 1v1 planar pursuit–evasion game. A Deep Q-Learning pursuer is evaluated against classical homing, deviated, and constant-bearing pursuit laws across deterministic and stochastic evasion strategies. Analytical methods dominate structured scenarios, while learning-based pursuit improves robustness under uncertainty at the cost of efficiency.
 
 ## Guidance Strategies
 ### Evader Guidance Strategies
